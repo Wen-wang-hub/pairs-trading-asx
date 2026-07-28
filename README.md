@@ -1,4 +1,4 @@
-# Pairs Trading Strategy in the Australian Energy Market
+# Pairs Trading Strategy in Financial Market
 
 This repository contains the Python implementation supporting the Master's thesis
 
