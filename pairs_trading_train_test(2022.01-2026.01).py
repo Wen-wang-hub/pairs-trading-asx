@@ -40,8 +40,7 @@ MIN_OBS = 100
 OUTPUT_PREFIX = "pairs_trading_train_test(2022-2026)"
 
 GAS_TICKERS = [
-    "WDS.AX","STO.AX","BPT.AX","AEL.AX","STX.AX","TBN.AX","BTL.AX","CTP.AX","COI.AX","GLL.AX",
-    "BRU.AX","VEN.AX","CUE.AX","TDO.AX","MEL.AX","IPB.AX",
+    "WDS.AX","STO.AX","BPT.AX","AEL.AX","STX.AX","TBN.AX","BTL.AX","CTP.AX","COI.AX","CUE.AX","TDO.AX","IPB.AX",
     "APA.AX","AGL.AX","ORG.AX","ALD.AX","VEA.AX","EWC.AX",
 ]
 
@@ -196,7 +195,7 @@ for SEED in SEED_LIST:
     # =========================================
     price_ret_check = prices.pct_change()
 
-    abnormal_mask = price_ret_check.abs() > 0.5
+    abnormal_mask = price_ret_check.abs() >= 0.5
     abnormal_stacked = price_ret_check[abnormal_mask].stack()
     abnormal_df = abnormal_stacked.rename("daily_return").reset_index()
     abnormal_df.columns = ["date", "ticker", "daily_return"]
@@ -552,7 +551,15 @@ for SEED in SEED_LIST:
         print(f"==============================")
 
         train_pairs_eval = []
-        pairs = list(itertools.combinations(train_data.columns, 2))
+
+        ordered_columns = sorted(train_data.columns)
+
+        pairs = list(
+            itertools.combinations(
+                ordered_columns,
+                2
+            )
+        )
 
         for s1, s2 in pairs:
             est = evaluate_pair_on_train(
@@ -1131,7 +1138,7 @@ def compute_theoretical_threshold_scores(
         s2
     )
 
-    if pd.isna(beta):
+    if pd.isna(beta) or not np.isfinite(beta):
         return pd.DataFrame()
 
     pair_data = train_data[[s1, s2]].dropna().copy()
@@ -1668,11 +1675,9 @@ def build_rolling_signal_frame(
             s1,
             s2
         )
+        if pd.isna(beta) or not np.isfinite(beta):
+            continue 
 
-        if pd.isna(beta):
-            continue
-
-        
         warmup_data = (
             train_data[[s1, s2]]
             .dropna()
@@ -2049,20 +2054,24 @@ static_alpha, static_beta = (
     )
 )
 
-if pd.isna(static_beta):
+static_beta_valid = (
+    pd.notna(static_beta)
+    and np.isfinite(static_beta)
+)
+
+if not static_beta_valid:
 
     print(
-        "⚠️ static_full_period 模式无法估计 beta，"
-        "将跳过该模式。"
+        "\n⚠️ Static beta could not be estimated. "
+        "The static_full_period sensitivity mode will be skipped."
     )
 
 else:
 
     print(
-        f"\nStatic beta estimated from initial "
-        f"training window: {static_beta:.4f}"
+        f"\nStatic beta estimated from the initial "
+        f"12-month training window: {static_beta:.4f}"
     )
-
     for lookback_z_value in LOOKBACK_GRID:
 
         static_signal_df = (
@@ -2751,7 +2760,12 @@ for mode_name in ["static_full_period", "rolling_calibrated"]:
             (sensitivity_summary_df["mode"] == mode_name) &
             (sensitivity_summary_df["lookback_z"] == lookback_z_value)
         ].copy()
-
+        if heatmap_df.empty:
+            print(
+                f"⚠️ Skipping heatmap: mode={mode_name}, "
+                f"lookback={lookback_z_value}, no valid results."
+                )
+            continue
         pivot_df = heatmap_df.pivot(
             index="entry_z",
             columns="exit_z",
@@ -3005,3 +3019,71 @@ print(f"4) {OUTPUT_PREFIX}_top5_pairs_annual_returns.csv")
 print(f"5) {OUTPUT_PREFIX}_top5_pairs_total_metrics.csv")
 print(f"6) {OUTPUT_PREFIX}_portfolio_daily_returns.csv")
 print(f"7) {OUTPUT_PREFIX}_portfolio_metrics.csv")
+
+
+
+
+
+# ==========================================================
+# STOCK UNIVERSE DIAGNOSTIC
+# ==========================================================
+
+print("\n")
+print("=" * 80)
+print("STOCK UNIVERSE DIAGNOSTIC")
+print("=" * 80)
+
+stock_summary = []
+
+for ticker in prices.columns:
+
+    s = prices[ticker].dropna()
+
+    daily_ret = s.pct_change().dropna()
+
+    stock_summary.append({
+        "Ticker": ticker,
+        "Average Price": s.mean(),
+        "Median Price": s.median(),
+        "Minimum Price": s.min(),
+        "Maximum Price": s.max(),
+        "Annualised Volatility": daily_ret.std() * np.sqrt(252),
+        "Maximum Daily Return": daily_ret.max(),
+        "Minimum Daily Return": daily_ret.min(),
+        "Observation Count": len(s)
+    })
+
+stock_summary_df = pd.DataFrame(stock_summary)
+
+stock_summary_df = stock_summary_df.sort_values(
+    by="Maximum Daily Return",
+    ascending=False
+)
+
+csv_name = f"{OUTPUT_PREFIX}_stock_summary.csv"
+
+stock_summary_df.to_csv(csv_name, index=False)
+
+print(stock_summary_df)
+
+print("\nSaved:")
+print(csv_name)
+print("\n")
+print("=" * 80)
+print("BEST PAIR STOCK SUMMARY")
+print("=" * 80)
+
+
+best_pair = [best_s1, best_s2]
+
+best_pair_stock_summary_df = stock_summary_df[
+    stock_summary_df["Ticker"].isin(best_pair)
+].copy()
+
+print(best_pair_stock_summary_df)
+
+best_pair_stock_summary_df.to_csv(
+    f"{OUTPUT_PREFIX}_best_pair_stock_summary.csv",
+    index=False
+)
+
